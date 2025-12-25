@@ -4,59 +4,35 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Soundboard – 청취자</title>
-
 <style>
-:root { --bg:#0f1115; --card:#171a21; --muted:#8a93a6; --accent:#6ee7b7; --text:#e8ecf3; }
-*{box-sizing:border-box}
-body{
-  margin:0;background:var(--bg);color:var(--text);
-  font-family:system-ui,Segoe UI,Roboto,Apple SD Gothic Neo,Malgun Gothic,sans-serif;
-}
-header{
-  padding:16px 20px;border-bottom:1px solid #222732;background:#0c0f14;
-}
-h1{margin:0;font-size:18px;font-weight:700}
-main{
-  max-width:820px;margin:0 auto;padding:20px;
-  display:flex;flex-direction:column;gap:16px;
-}
-.panel{
-  background:var(--card);border:1px solid #222732;
-  border-radius:14px;padding:14px;
-}
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.btn{
-  background:#232939;color:var(--text);
-  border:1px solid #2c3347;border-radius:10px;
-  padding:10px 14px;cursor:pointer;font-weight:600;
-}
-.btn-accent{
-  background:linear-gradient(90deg,#10b981,#34d399);
-  color:#0b0f14;border:0
-}
-input[type="text"]{
-  background:#0b0f14;border:1px solid #22314b;
-  border-radius:10px;padding:10px 12px;color:var(--text)
-}
-.small{font-size:12px;color:var(--muted)}
-.meter{display:flex;gap:8px;align-items:center}
-.mono{font-family:ui-monospace,monospace}
+  :root { --bg:#0f1115; --card:#171a21; --muted:#8a93a6; --accent:#6ee7b7; --text:#e8ecf3; }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,Roboto,Apple SD Gothic Neo,Malgun Gothic,sans-serif;}
+  header{padding:16px 20px;border-bottom:1px solid #222732;background:#0c0f14;display:flex;gap:14px;align-items:center;justify-content:space-between}
+  h1{margin:0;font-size:18px;font-weight:700}
+  main{max-width:820px;margin:0 auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+  .panel{background:var(--card);border:1px solid #222732;border-radius:14px;padding:14px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .btn{background:#232939;color:var(--text);border:1px solid #2c3347;border-radius:10px;padding:10px 14px;cursor:pointer;font-weight:600}
+  .btn:hover{border-color:#3b435c}
+  .btn-accent{background:linear-gradient(90deg,#10b981,#34d399);color:#0b0f14;border:0}
+  input[type="text"]{background:#0b0f14;border:1px solid #22314b;border-radius:10px;padding:10px 12px;color:var(--text);outline:none}
+  .small{font-size:12px;color:var(--muted)}
+  .meter{display:flex;gap:8px;align-items:center}
+  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace}
 </style>
 </head>
-
 <body>
-
 <header>
   <h1>사운드보드 청취자</h1>
-  <div class="small">공유 코드를 입력하고 연결하세요</div>
+  <div class="small">공유자가 생성한 6자리 코드를 입력해 같은 소리를 함께 들을 수 있습니다.</div>
 </header>
 
 <main>
   <section class="panel">
     <div class="row">
-      <input id="codeInput" class="mono" placeholder="공유 코드" />
+      <input id="codeInput" type="text" placeholder="공유 코드 (예: 7K3M9X)" class="mono" maxlength="12" />
       <button id="connectBtn" class="btn btn-accent">연결</button>
-      <button id="disconnectBtn" class="btn">해제</button>
+      <button id="disconnectBtn" class="btn">연결 해제</button>
       <span id="status" class="small">대기 중…</span>
     </div>
   </section>
@@ -64,21 +40,23 @@ input[type="text"]{
   <section class="panel">
     <div class="row">
       <button id="pauseBtn" class="btn">정지(로컬)</button>
-      <button id="resumeBtn" class="btn">이어듣기</button>
+      <button id="resumeBtn" class="btn">이어 듣기</button>
       <div class="meter">
         <span class="small">볼륨</span>
         <input id="vol" type="range" min="0" max="1" step="0.01" value="0.9" />
         <span id="volVal" class="small">0.90</span>
       </div>
     </div>
+    <div class="small" style="margin-top:6px">
+      • 정지는 <b>로컬</b>로만 작동합니다(다시 누르면 이어듣기 가능). 공유자 측 재생에는 영향이 없습니다.<br/>
+      • 네트워크 상태에 따라 약간의 지연이 있을 수 있습니다.
+    </div>
   </section>
 </main>
 
-<!-- 🔴 첫 코드의 핵심: autoplay + playsinline -->
 <audio id="remoteAudio" autoplay playsinline></audio>
 
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-
 <script>
 const codeInput = document.getElementById('codeInput');
 const connectBtn = document.getElementById('connectBtn');
@@ -93,90 +71,64 @@ const remoteAudio = document.getElementById('remoteAudio');
 let peer = null;
 let dataConn = null;
 
-/* 🔹 AudioContext는 “있으면 쓰고 없어도 됨” */
-let audioCtx = null;
-let gainNode = null;
-
 function setStatus(t){ statusEl.textContent = t; }
 
-/* ================= 연결 ================= */
-connectBtn.onclick = async () => {
-  const code = codeInput.value.trim();
-  if (!code) return alert('공유 코드를 입력하세요');
-  if (peer) return;
+connectBtn.onclick = ()=>{
+  const code = (codeInput.value || '').trim();
+  if (!code) { alert('공유 코드를 입력하세요.'); return; }
+  if (peer) { alert('이미 연결 시도 중 또는 연결됨. 먼저 해제하세요.'); return; }
 
-  peer = new Peer(undefined, {
-    debug: 1,
-    config: {
-      iceServers: [{ urls:'stun:stun.l.google.com:19302' }]
-    }
-  });
+  // 청취자는 랜덤 ID로 시작
+  peer = new Peer(undefined, { debug: 1 });
+  setStatus('신호 서버 연결 중…');
 
-  setStatus('연결 중…');
-
-  peer.on('open', () => {
+  peer.on('open', (myId)=>{
+    setStatus(`내 ID: ${myId} / 코드로 연결 시도…`);
+    // 데이터 채널 먼저 연결 → 공유자가 이 연결을 보고 오디오 Call을 걸어옴
     dataConn = peer.connect(code);
-    dataConn.on('open', () => setStatus('연결됨 · 오디오 대기'));
+    dataConn.on('open', ()=>{
+      setStatus('데이터 연결 완료. 오디오 수신 대기…');
+      dataConn.on('data', (msg)=> {
+        // (옵션) 공유자 상태 메시지
+        // console.log('data:', msg);
+      });
+    });
+    dataConn.on('close', ()=> setStatus('데이터 연결 종료'));
   });
 
-  peer.on('call', (call) => {
-    call.answer(null); // 🔵 첫 코드 방식 그대로
-
-    call.on('stream', async (stream) => {
-      /* 🔴 핵심 복구 1: 직접 재생 */
-      remoteAudio.srcObject = stream;
-      remoteAudio.volume = vol.value;
-
-      try {
-        await remoteAudio.play();
-      } catch(e) {
-        console.warn('autoplay 차단, 수동 재개 필요');
-      }
-
-      /* 🔵 보조: AudioContext (안 되면 무시) */
-      try {
-        if (!audioCtx) {
-          audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-          const src = audioCtx.createMediaElementSource(remoteAudio);
-          gainNode = audioCtx.createGain();
-          gainNode.gain.value = vol.value;
-          src.connect(gainNode).connect(audioCtx.destination);
-        }
-        await audioCtx.resume();
-      } catch(e){}
-
-      setStatus('같이 듣는 중 🎧');
+  // 공유자가 Call을 걸어오면 수신
+  peer.on('call', (call)=>{
+    call.answer(null); // 우리 쪽 스트림은 없음
+    call.on('stream', (remoteStream)=>{
+      remoteAudio.srcObject = remoteStream;
+      setStatus('오디오 수신 중 (같이 듣는 중)');
     });
   });
 
-  peer.on('error', e => {
-    console.error(e);
-    setStatus('오류 발생');
+  peer.on('error', (err)=>{
+    console.error(err);
+    setStatus('오류: ' + err.message);
+    alert("Peer 오류: " + err.message);
+  });
+
+  peer.on('disconnected', ()=>{
+    setStatus('신호 서버 연결 끊김(자동 재시도 중)');
+    peer.reconnect();
   });
 };
 
-/* ================= 해제 ================= */
-disconnectBtn.onclick = () => {
-  try{ dataConn && dataConn.close(); }catch{}
-  try{ peer && peer.destroy(); }catch{}
+disconnectBtn.onclick = ()=>{
+  try { dataConn && dataConn.close(); } catch(_){}
+  if (peer) { try { peer.destroy(); } catch(_){} }
   peer = null; dataConn = null;
-
-  remoteAudio.pause();
   remoteAudio.srcObject = null;
-
   setStatus('연결 해제됨');
 };
 
-/* ================= 컨트롤 ================= */
-pauseBtn.onclick = () => remoteAudio.pause();
-resumeBtn.onclick = () => remoteAudio.play();
-
-vol.oninput = () => {
-  volVal.textContent = (+vol.value).toFixed(2);
-  remoteAudio.volume = vol.value;
-  if (gainNode) gainNode.gain.value = vol.value;
-};
+// 로컬 정지/재개 + 볼륨
+pauseBtn.onclick = ()=> remoteAudio.pause();
+resumeBtn.onclick = ()=> remoteAudio.play();
+vol.oninput = ()=> { remoteAudio.volume = parseFloat(vol.value); volVal.textContent = (+vol.value).toFixed(2); };
 </script>
-
 </body>
 </html>
