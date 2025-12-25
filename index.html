@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Soundboard – 청취자</title>
+<title>Soundboard – Listener</title>
 
 <style>
 :root {
@@ -17,7 +17,7 @@ body{
 }
 header{
   padding:16px 20px;border-bottom:1px solid #222732;
-  background:#0c0f14;display:flex;flex-direction:column;gap:6px;
+  background:#0c0f14;
 }
 h1{margin:0;font-size:18px;font-weight:700}
 main{
@@ -56,17 +56,14 @@ input[type="text"]{
 
 <header>
   <h1>사운드보드 청취자</h1>
-  <div class="small">
-    공유자가 생성한 코드를 입력하고 “연결(소리 켜기)”를 누르세요
-  </div>
+  <div class="small">공유 코드를 입력하고 반드시 “연결(소리 켜기)”를 누르세요</div>
 </header>
 
 <main>
   <section class="panel">
     <div class="row">
-      <input id="codeInput" type="text"
-        placeholder="공유 코드 (예: 7K3M9X)"
-        class="mono" maxlength="12" />
+      <input id="codeInput" type="text" class="mono"
+        placeholder="공유 코드 (예: 7K3M9X)" maxlength="12" />
       <button id="connectBtn" class="btn btn-accent">
         연결 (소리 켜기)
       </button>
@@ -86,19 +83,19 @@ input[type="text"]{
       </div>
     </div>
     <div class="small" style="margin-top:6px">
-      • 정지는 <b>내 기기에서만</b> 적용됩니다.<br/>
-      • 네트워크 상태에 따라 약간의 지연이 있을 수 있습니다.
+      • 정지는 내 기기에서만 적용됩니다.<br/>
+      • 최초 연결은 반드시 버튼 클릭으로 해야 합니다.
     </div>
   </section>
 </main>
 
-<!-- 실제 재생은 AudioContext가 담당 -->
-<audio id="dummyAudio" playsinline></audio>
+<!-- 실제 오디오 엔진 -->
+<audio id="remoteAudio" playsinline></audio>
 
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
 <script>
-/* ================== DOM ================== */
+/* ================= DOM ================= */
 const codeInput = document.getElementById('codeInput');
 const connectBtn = document.getElementById('connectBtn');
 const disconnectBtn = document.getElementById('disconnectBtn');
@@ -107,38 +104,48 @@ const pauseBtn = document.getElementById('pauseBtn');
 const resumeBtn = document.getElementById('resumeBtn');
 const vol = document.getElementById('vol');
 const volVal = document.getElementById('volVal');
+const remoteAudio = document.getElementById('remoteAudio');
 
-/* ================== Audio ================== */
+/* ================= Audio ================= */
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let audioCtx = null;
 let sourceNode = null;
 let gainNode = null;
 
-async function unlockAudio(){
+async function setupAudio(stream) {
   if (!audioCtx) {
     audioCtx = new AudioCtx();
     gainNode = audioCtx.createGain();
     gainNode.gain.value = parseFloat(vol.value);
     gainNode.connect(audioCtx.destination);
   }
+
+  // 🔴 WebRTC 오디오는 반드시 audio 태그에 연결
+  remoteAudio.srcObject = stream;
+  remoteAudio.muted = true; // 에코 방지
+  await remoteAudio.play();
+
+  if (!sourceNode) {
+    sourceNode = audioCtx.createMediaElementSource(remoteAudio);
+    sourceNode.connect(gainNode);
+  }
+
   if (audioCtx.state !== 'running') {
     await audioCtx.resume();
   }
 }
 
-/* ================== Peer ================== */
+/* ================= Peer ================= */
 let peer = null;
 let dataConn = null;
 
 function setStatus(t){ statusEl.textContent = t; }
 
-/* ================== Connect ================== */
+/* ================= Connect ================= */
 connectBtn.onclick = async () => {
   const code = (codeInput.value || '').trim();
-  if (!code) { alert('공유 코드를 입력하세요.'); return; }
-  if (peer) { alert('이미 연결되어 있습니다.'); return; }
-
-  await unlockAudio();
+  if (!code) { alert('공유 코드를 입력하세요'); return; }
+  if (peer) { alert('이미 연결 중입니다'); return; }
 
   peer = new Peer(undefined, {
     debug: 1,
@@ -152,31 +159,18 @@ connectBtn.onclick = async () => {
 
   setStatus('신호 서버 연결 중…');
 
-  peer.on('open', (myId) => {
-    setStatus('연결 시도 중…');
+  peer.on('open', () => {
     dataConn = peer.connect(code);
-
-    dataConn.on('open', () => {
-      setStatus('연결됨 · 오디오 대기 중');
-    });
-
-    dataConn.on('close', () => {
-      setStatus('데이터 연결 종료');
-    });
+    dataConn.on('open', () => setStatus('연결됨 · 오디오 대기 중'));
+    dataConn.on('close', () => setStatus('데이터 연결 종료'));
   });
 
-  peer.on('call', async (call) => {
-    // Safari 호환
+  peer.on('call', (call) => {
+    // Safari 대응
     call.answer(new MediaStream());
 
     call.on('stream', async (remoteStream) => {
-      await unlockAudio();
-
-      if (!sourceNode) {
-        sourceNode = audioCtx.createMediaStreamSource(remoteStream);
-        sourceNode.connect(gainNode);
-      }
-
+      await setupAudio(remoteStream);
       setStatus('오디오 수신 중 🎧');
     });
   });
@@ -193,12 +187,17 @@ connectBtn.onclick = async () => {
   });
 };
 
-/* ================== Disconnect ================== */
+/* ================= Disconnect ================= */
 disconnectBtn.onclick = () => {
-  try { dataConn && dataConn.close(); } catch(e){}
-  try { peer && peer.destroy(); } catch(e){}
+  try { dataConn && dataConn.close(); } catch {}
+  try { peer && peer.destroy(); } catch {}
   peer = null;
   dataConn = null;
+
+  try {
+    remoteAudio.pause();
+    remoteAudio.srcObject = null;
+  } catch {}
 
   if (audioCtx) {
     audioCtx.close();
@@ -210,13 +209,13 @@ disconnectBtn.onclick = () => {
   setStatus('연결 해제됨');
 };
 
-/* ================== Controls ================== */
+/* ================= Controls ================= */
 pauseBtn.onclick = () => {
   audioCtx && audioCtx.suspend();
 };
 
 resumeBtn.onclick = async () => {
-  if (audioCtx) await audioCtx.resume();
+  audioCtx && await audioCtx.resume();
 };
 
 vol.oninput = () => {
