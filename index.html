@@ -3,21 +3,17 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Soundboard – Listener</title>
+<title>Soundboard – 청취자</title>
 
 <style>
-:root {
-  --bg:#0f1115; --card:#171a21; --muted:#8a93a6;
-  --accent:#6ee7b7; --text:#e8ecf3;
-}
+:root { --bg:#0f1115; --card:#171a21; --muted:#8a93a6; --accent:#6ee7b7; --text:#e8ecf3; }
 *{box-sizing:border-box}
 body{
   margin:0;background:var(--bg);color:var(--text);
   font-family:system-ui,Segoe UI,Roboto,Apple SD Gothic Neo,Malgun Gothic,sans-serif;
 }
 header{
-  padding:16px 20px;border-bottom:1px solid #222732;
-  background:#0c0f14;
+  padding:16px 20px;border-bottom:1px solid #222732;background:#0c0f14;
 }
 h1{margin:0;font-size:18px;font-weight:700}
 main{
@@ -34,21 +30,17 @@ main{
   border:1px solid #2c3347;border-radius:10px;
   padding:10px 14px;cursor:pointer;font-weight:600;
 }
-.btn:hover{border-color:#3b435c}
 .btn-accent{
   background:linear-gradient(90deg,#10b981,#34d399);
-  color:#0b0f14;border:0;
+  color:#0b0f14;border:0
 }
 input[type="text"]{
   background:#0b0f14;border:1px solid #22314b;
-  border-radius:10px;padding:10px 12px;
-  color:var(--text);outline:none;
+  border-radius:10px;padding:10px 12px;color:var(--text)
 }
 .small{font-size:12px;color:var(--muted)}
 .meter{display:flex;gap:8px;align-items:center}
-.mono{
-  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
-}
+.mono{font-family:ui-monospace,monospace}
 </style>
 </head>
 
@@ -56,18 +48,15 @@ input[type="text"]{
 
 <header>
   <h1>사운드보드 청취자</h1>
-  <div class="small">공유 코드를 입력하고 반드시 “연결(소리 켜기)”를 누르세요</div>
+  <div class="small">공유 코드를 입력하고 연결하세요</div>
 </header>
 
 <main>
   <section class="panel">
     <div class="row">
-      <input id="codeInput" type="text" class="mono"
-        placeholder="공유 코드 (예: 7K3M9X)" maxlength="12" />
-      <button id="connectBtn" class="btn btn-accent">
-        연결 (소리 켜기)
-      </button>
-      <button id="disconnectBtn" class="btn">연결 해제</button>
+      <input id="codeInput" class="mono" placeholder="공유 코드" />
+      <button id="connectBtn" class="btn btn-accent">연결</button>
+      <button id="disconnectBtn" class="btn">해제</button>
       <span id="status" class="small">대기 중…</span>
     </div>
   </section>
@@ -75,27 +64,22 @@ input[type="text"]{
   <section class="panel">
     <div class="row">
       <button id="pauseBtn" class="btn">정지(로컬)</button>
-      <button id="resumeBtn" class="btn">이어 듣기</button>
+      <button id="resumeBtn" class="btn">이어듣기</button>
       <div class="meter">
         <span class="small">볼륨</span>
         <input id="vol" type="range" min="0" max="1" step="0.01" value="0.9" />
         <span id="volVal" class="small">0.90</span>
       </div>
     </div>
-    <div class="small" style="margin-top:6px">
-      • 정지는 내 기기에서만 적용됩니다.<br/>
-      • 최초 연결은 반드시 버튼 클릭으로 해야 합니다.
-    </div>
   </section>
 </main>
 
-<!-- 실제 오디오 엔진 -->
-<audio id="remoteAudio" playsinline></audio>
+<!-- 🔴 첫 코드의 핵심: autoplay + playsinline -->
+<audio id="remoteAudio" autoplay playsinline></audio>
 
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
 <script>
-/* ================= DOM ================= */
 const codeInput = document.getElementById('codeInput');
 const connectBtn = document.getElementById('connectBtn');
 const disconnectBtn = document.getElementById('disconnectBtn');
@@ -106,122 +90,91 @@ const vol = document.getElementById('vol');
 const volVal = document.getElementById('volVal');
 const remoteAudio = document.getElementById('remoteAudio');
 
-/* ================= Audio ================= */
-const AudioCtx = window.AudioContext || window.webkitAudioContext;
-let audioCtx = null;
-let sourceNode = null;
-let gainNode = null;
-
-async function setupAudio(stream) {
-  if (!audioCtx) {
-    audioCtx = new AudioCtx();
-    gainNode = audioCtx.createGain();
-    gainNode.gain.value = parseFloat(vol.value);
-    gainNode.connect(audioCtx.destination);
-  }
-
-  // 🔴 WebRTC 오디오는 반드시 audio 태그에 연결
-  remoteAudio.srcObject = stream;
-  remoteAudio.muted = true; // 에코 방지
-  await remoteAudio.play();
-
-  if (!sourceNode) {
-    sourceNode = audioCtx.createMediaElementSource(remoteAudio);
-    sourceNode.connect(gainNode);
-  }
-
-  if (audioCtx.state !== 'running') {
-    await audioCtx.resume();
-  }
-}
-
-/* ================= Peer ================= */
 let peer = null;
 let dataConn = null;
 
+/* 🔹 AudioContext는 “있으면 쓰고 없어도 됨” */
+let audioCtx = null;
+let gainNode = null;
+
 function setStatus(t){ statusEl.textContent = t; }
 
-/* ================= Connect ================= */
+/* ================= 연결 ================= */
 connectBtn.onclick = async () => {
-  const code = (codeInput.value || '').trim();
-  if (!code) { alert('공유 코드를 입력하세요'); return; }
-  if (peer) { alert('이미 연결 중입니다'); return; }
+  const code = codeInput.value.trim();
+  if (!code) return alert('공유 코드를 입력하세요');
+  if (peer) return;
 
   peer = new Peer(undefined, {
     debug: 1,
     config: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
+      iceServers: [{ urls:'stun:stun.l.google.com:19302' }]
     }
   });
 
-  setStatus('신호 서버 연결 중…');
+  setStatus('연결 중…');
 
   peer.on('open', () => {
     dataConn = peer.connect(code);
-    dataConn.on('open', () => setStatus('연결됨 · 오디오 대기 중'));
-    dataConn.on('close', () => setStatus('데이터 연결 종료'));
+    dataConn.on('open', () => setStatus('연결됨 · 오디오 대기'));
   });
 
   peer.on('call', (call) => {
-    // Safari 대응
-    call.answer(new MediaStream());
+    call.answer(null); // 🔵 첫 코드 방식 그대로
 
-    call.on('stream', async (remoteStream) => {
-      await setupAudio(remoteStream);
-      setStatus('오디오 수신 중 🎧');
+    call.on('stream', async (stream) => {
+      /* 🔴 핵심 복구 1: 직접 재생 */
+      remoteAudio.srcObject = stream;
+      remoteAudio.volume = vol.value;
+
+      try {
+        await remoteAudio.play();
+      } catch(e) {
+        console.warn('autoplay 차단, 수동 재개 필요');
+      }
+
+      /* 🔵 보조: AudioContext (안 되면 무시) */
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+          const src = audioCtx.createMediaElementSource(remoteAudio);
+          gainNode = audioCtx.createGain();
+          gainNode.gain.value = vol.value;
+          src.connect(gainNode).connect(audioCtx.destination);
+        }
+        await audioCtx.resume();
+      } catch(e){}
+
+      setStatus('같이 듣는 중 🎧');
     });
   });
 
-  peer.on('error', (err) => {
-    console.error(err);
-    alert('Peer 오류: ' + err.message);
+  peer.on('error', e => {
+    console.error(e);
     setStatus('오류 발생');
-  });
-
-  peer.on('disconnected', () => {
-    setStatus('신호 서버 연결 끊김 (재시도 중)');
-    peer.reconnect();
   });
 };
 
-/* ================= Disconnect ================= */
+/* ================= 해제 ================= */
 disconnectBtn.onclick = () => {
-  try { dataConn && dataConn.close(); } catch {}
-  try { peer && peer.destroy(); } catch {}
-  peer = null;
-  dataConn = null;
+  try{ dataConn && dataConn.close(); }catch{}
+  try{ peer && peer.destroy(); }catch{}
+  peer = null; dataConn = null;
 
-  try {
-    remoteAudio.pause();
-    remoteAudio.srcObject = null;
-  } catch {}
-
-  if (audioCtx) {
-    audioCtx.close();
-    audioCtx = null;
-    sourceNode = null;
-    gainNode = null;
-  }
+  remoteAudio.pause();
+  remoteAudio.srcObject = null;
 
   setStatus('연결 해제됨');
 };
 
-/* ================= Controls ================= */
-pauseBtn.onclick = () => {
-  audioCtx && audioCtx.suspend();
-};
-
-resumeBtn.onclick = async () => {
-  audioCtx && await audioCtx.resume();
-};
+/* ================= 컨트롤 ================= */
+pauseBtn.onclick = () => remoteAudio.pause();
+resumeBtn.onclick = () => remoteAudio.play();
 
 vol.oninput = () => {
-  const v = parseFloat(vol.value);
-  volVal.textContent = v.toFixed(2);
-  if (gainNode) gainNode.gain.value = v;
+  volVal.textContent = (+vol.value).toFixed(2);
+  remoteAudio.volume = vol.value;
+  if (gainNode) gainNode.gain.value = vol.value;
 };
 </script>
 
