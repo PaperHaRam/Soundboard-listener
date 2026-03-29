@@ -72,45 +72,37 @@ const remoteAudio = document.getElementById('remoteAudio');
 
 let peer = null;
 let dataConn = null;
-let remoteCall = null;
-let playbackUnlocked = false;
 
 function setStatus(t){ statusEl.textContent = t; }
 
-async function unlockPlayback(){
-  try {
-    remoteAudio.muted = false;
-    const playPromise = remoteAudio.play();
-    if (playPromise && typeof playPromise.then === 'function') {
-      await playPromise;
-      remoteAudio.pause();
-      playbackUnlocked = true;
-    }
-  } catch (_) {
-    // 아직 스트림이 없어서 play()가 실패하는 건 자연스러움.
-    // 클릭 기반 사용자 액션 안에서 한 번 시도해두는 것이 목적.
-  }
-}
 
-async function tryPlayRemote(){
-  remoteAudio.muted = false;
-  const playPromise = remoteAudio.play();
-  if (playPromise && typeof playPromise.then === 'function') {
-    await playPromise;
+const peerConfig = {
+  debug: 1,
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      {
+        urls: [
+          'turn:global.turn.metered.ca:80',
+          'turn:global.turn.metered.ca:80?transport=tcp',
+          'turn:global.turn.metered.ca:443',
+          'turns:global.turn.metered.ca:443?transport=tcp'
+        ],
+        username: '3871bd9dc3620efc7f33b1c2',
+        credential: 'JQmFFFxCex0Hnc9H'
+      }
+    ]
   }
-  playbackUnlocked = true;
-}
+};
 
-connectBtn.onclick = async ()=>{
+
+connectBtn.onclick = ()=>{
   const code = (codeInput.value || '').trim();
   if (!code) { alert('공유 코드를 입력하세요.'); return; }
   if (peer) { alert('이미 연결 시도 중 또는 연결됨. 먼저 해제하세요.'); return; }
 
-  // UI는 그대로 두고, 연결 클릭 자체를 재생 권한 확보용 사용자 액션으로 같이 사용
-  await unlockPlayback();
-
   // 청취자는 랜덤 ID로 시작
-  peer = new Peer(undefined, { debug: 1 });
+  peer = new Peer(undefined, peerConfig);
   setStatus('신호 서버 연결 중…');
 
   peer.on('open', (myId)=>{
@@ -129,23 +121,10 @@ connectBtn.onclick = async ()=>{
 
   // 공유자가 Call을 걸어오면 수신
   peer.on('call', (call)=>{
-    remoteCall = call;
     call.answer(null); // 우리 쪽 스트림은 없음
-    call.on('stream', async (remoteStream)=>{
+    call.on('stream', (remoteStream)=>{
       remoteAudio.srcObject = remoteStream;
-      try {
-        await tryPlayRemote();
-        setStatus('오디오 수신 중 (같이 듣는 중)');
-      } catch (err) {
-        console.warn('remoteAudio.play() failed:', err);
-        setStatus(playbackUnlocked
-          ? '오디오 수신됨 · 브라우저 재생 제한 또는 네트워크 지연 가능'
-          : '오디오 수신됨 · 이어 듣기를 눌러 재생하세요');
-      }
-    });
-    call.on('close', ()=>{
-      if (remoteAudio.srcObject) remoteAudio.srcObject = null;
-      setStatus('오디오 연결 종료');
+      setStatus('오디오 수신 중 (같이 듣는 중)');
     });
   });
 
@@ -162,26 +141,16 @@ connectBtn.onclick = async ()=>{
 };
 
 disconnectBtn.onclick = ()=>{
-  try { remoteCall && remoteCall.close(); } catch(_){}
   try { dataConn && dataConn.close(); } catch(_){}
   if (peer) { try { peer.destroy(); } catch(_){} }
-  peer = null; dataConn = null; remoteCall = null;
-  remoteAudio.pause();
+  peer = null; dataConn = null;
   remoteAudio.srcObject = null;
   setStatus('연결 해제됨');
 };
 
 // 로컬 정지/재개 + 볼륨
 pauseBtn.onclick = ()=> remoteAudio.pause();
-resumeBtn.onclick = async ()=> {
-  try {
-    await tryPlayRemote();
-    setStatus(remoteAudio.srcObject ? '오디오 수신 중 (같이 듣는 중)' : '오디오 대기 중…');
-  } catch (err) {
-    console.warn('resume failed:', err);
-    alert('아직 스트림이 도착하지 않았거나 브라우저가 재생을 막고 있습니다.');
-  }
-};
+resumeBtn.onclick = ()=> remoteAudio.play();
 vol.oninput = ()=> { remoteAudio.volume = parseFloat(vol.value); volVal.textContent = (+vol.value).toFixed(2); };
 </script>
 </body>
