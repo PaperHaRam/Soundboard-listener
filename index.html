@@ -35,6 +35,7 @@
       <input id="codeInput" type="text" placeholder="공유 코드 (예: 7K3M9X)" class="mono" maxlength="12" />
       <button id="connectBtn" class="btn btn-accent">연결</button>
       <button id="disconnectBtn" class="btn">연결 해제</button>
+      <button id="unlockBtn" class="btn">🔊 소리 켜기</button>
       <span id="status" class="small">대기 중…</span>
     </div>
   </section>
@@ -69,11 +70,90 @@ const resumeBtn = document.getElementById('resumeBtn');
 const vol = document.getElementById('vol');
 const volVal = document.getElementById('volVal');
 const remoteAudio = document.getElementById('remoteAudio');
+const unlockBtn = document.getElementById('unlockBtn');
+
+const WEBRTC_CONFIG = {
+  debug: 1,
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' }
+      // 호스트와 동일하게 실제 TURN 서버를 추가하면 제한망에서 성공률이 높아집니다.
+      // { urls: 'turn:turn.example.com:3478', username: 'USER', credential: 'PASS' },
+      // { urls: 'turns:turn.example.com:5349', username: 'USER', credential: 'PASS' },
+    ],
+    iceCandidatePoolSize: 10
+  }
+};
+
+const FORCE_RELAY = false;
+if (FORCE_RELAY) {
+  WEBRTC_CONFIG.config.iceTransportPolicy = 'relay';
+}
+
+function hasTurnServer() {
+  return WEBRTC_CONFIG.config.iceServers.some(server => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+    return urls.some(url => String(url).startsWith('turn:') || String(url).startsWith('turns:'));
+  });
+}
+
+function createPeer() {
+  return new Peer(undefined, WEBRTC_CONFIG);
+}
+
+function getPeerConnectionFromCall(call) {
+  return call?.peerConnection || call?._pc || null;
+}
+
+function attachCallDebug(call) {
+  const pc = getPeerConnectionFromCall(call);
+  if (!pc) return;
+  const logState = () => {
+    console.log('[Listener WebRTC]', {
+      iceConnectionState: pc.iceConnectionState,
+      connectionState: pc.connectionState
+    });
+    if (pc.iceConnectionState === 'failed' || pc.connectionState === 'failed') {
+      setStatus('연결 실패 - 제한망이면 TURN 서버 필요 가능');
+    }
+  };
+  pc.addEventListener?.('iceconnectionstatechange', logState);
+  pc.addEventListener?.('connectionstatechange', logState);
+  logState();
+}
+
+function getNetworkTroubleshootingText() {
+  if (hasTurnServer()) {
+    return 'STUN/TURN 설정이 적용되어 있습니다. 그래도 안 되면 방화벽, VPN, 프록시, 보안 SW 차단 여부를 확인하세요.';
+  }
+  return '현재는 STUN만 설정된 상태입니다. 일부 사내망/학교망/이동통신망/대칭 NAT 환경에서는 TURN 서버 없이는 소리가 전달되지 않을 수 있습니다.';
+}
+
+async function unlockRemoteAudio() {
+  try {
+    remoteAudio.muted = false;
+    await remoteAudio.play();
+    unlockBtn.textContent = '🔊 준비 완료';
+    unlockBtn.disabled = true;
+  } catch (err) {
+    console.warn('remoteAudio.play() 실패', err);
+    setStatus('브라우저 자동재생 차단 - "소리 켜기"를 다시 눌러주세요');
+  }
+}
 
 let peer = null;
 let dataConn = null;
+let currentCall = null;
+let streamTimeout = null;
 
 function setStatus(t){ statusEl.textContent = t; }
+
+unlockBtn.addEventListener('click', unlockRemoteAudio);
+
+remoteAudio.autoplay = true;
+remoteAudio.playsInline = true;
+remoteAudio.addEventListener('error', () => setStatus('오디오 엘리먼트 오류 발생'));
 
 connectBtn.onclick = ()=>{
   const code = (codeInput.value || '').trim();
@@ -81,7 +161,7 @@ connectBtn.onclick = ()=>{
   if (peer) { alert('이미 연결 시도 중 또는 연결됨. 먼저 해제하세요.'); return; }
 
   // 청취자는 랜덤 ID로 시작
-  peer = new Peer(undefined, { debug: 1 });
+  peer = createPeer();
   setStatus('신호 서버 연결 중…');
 
   peer.on('open', (myId)=>{
@@ -90,6 +170,11 @@ connectBtn.onclick = ()=>{
     dataConn = peer.connect(code);
     dataConn.on('open', ()=>{
       setStatus('데이터 연결 완료. 오디오 수신 대기…');
+      if (streamTimeout) clearTimeout(streamTimeout);
+      streamTimeout = setTimeout(() => {
+        setStatus('오디오 스트림 미도착 - 제한망이면 TURN 서버 필요 가능');
+      }, 12000);
+
       dataConn.on('data', (msg)=> {
         // (옵션) 공유자 상태 메시지
         // console.log('data:', msg);
@@ -100,17 +185,44 @@ connectBtn.onclick = ()=>{
 
   // 공유자가 Call을 걸어오면 수신
   peer.on('call', (call)=>{
+    if (currentCall) {
+      try { currentCall.close(); } catch (_) {}
+    }
+    currentCall = call;
+    attachCallDebug(call);
+
     call.answer(null); // 우리 쪽 스트림은 없음
-    call.on('stream', (remoteStream)=>{
+
+    call.on('stream', async (remoteStream)=>{
+      if (streamTimeout) {
+        clearTimeout(streamTimeout);
+        streamTimeout = null;
+      }
       remoteAudio.srcObject = remoteStream;
-      setStatus('오디오 수신 중 (같이 듣는 중)');
+      try {
+        await remoteAudio.play();
+        setStatus('오디오 수신 중 (같이 듣는 중)');
+      } catch (err) {
+        console.warn('자동 재생 차단', err);
+        setStatus('스트림 수신됨 - 브라우저가 자동재생을 막아서 "소리 켜기"가 필요함');
+      }
+    });
+
+    call.on('close', ()=>{
+      if (currentCall === call) currentCall = null;
+      setStatus('오디오 연결 종료');
+    });
+
+    call.on('error', (err)=>{
+      console.error(err);
+      setStatus('오디오 연결 오류: ' + err.message);
     });
   });
 
   peer.on('error', (err)=>{
     console.error(err);
     setStatus('오류: ' + err.message);
-    alert("Peer 오류: " + err.message);
+    alert("Peer 오류: " + err.message + "\n\n" + getNetworkTroubleshootingText());
   });
 
   peer.on('disconnected', ()=>{
@@ -120,9 +232,16 @@ connectBtn.onclick = ()=>{
 };
 
 disconnectBtn.onclick = ()=>{
+  if (streamTimeout) {
+    clearTimeout(streamTimeout);
+    streamTimeout = null;
+  }
   try { dataConn && dataConn.close(); } catch(_){}
+  try { currentCall && currentCall.close(); } catch(_){}
   if (peer) { try { peer.destroy(); } catch(_){} }
-  peer = null; dataConn = null;
+  peer = null;
+  dataConn = null;
+  currentCall = null;
   remoteAudio.srcObject = null;
   setStatus('연결 해제됨');
 };
@@ -131,6 +250,13 @@ disconnectBtn.onclick = ()=>{
 pauseBtn.onclick = ()=> remoteAudio.pause();
 resumeBtn.onclick = ()=> remoteAudio.play();
 vol.oninput = ()=> { remoteAudio.volume = parseFloat(vol.value); volVal.textContent = (+vol.value).toFixed(2); };
+
+if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+  console.warn('HTTPS가 아닌 환경에서는 WebRTC 동작이 제한될 수 있습니다.');
+}
+
+setStatus(hasTurnServer() ? '대기 중… (STUN+TURN 설정)' : '대기 중… (STUN only / 제한망이면 TURN 필요 가능)');
+
 </script>
 </body>
 </html>
